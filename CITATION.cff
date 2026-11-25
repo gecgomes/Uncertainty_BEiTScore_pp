@@ -1,0 +1,45 @@
+cff-version: 1.2.0
+message: "If you use BEiTScore++, please cite the paper below. If you use BEiTScore, please also cite the reference listed under references."
+title: "Uncertainty_BEiTScore_pp"
+repository-code: "https://github.com/gecgomes/Uncertainty_BEiTScore_pp"
+license: MIT
+authors:
+  - family-names: Gomes
+    given-names: Gonçalo
+  - family-names: Martins
+    given-names: Bruno
+  - family-names: Zerva
+    given-names: Chrysoula
+preferred-citation:
+  type: conference-paper
+  title: "BEiTScore++: Reference-free Image Captioning Evaluation with BEiT-3 and Conformalized Quantile Regression"
+  authors:
+    - family-names: Gomes
+      given-names: Gonçalo
+    - family-names: Martins
+      given-names: Bruno
+    - family-names: Zerva
+      given-names: Chrysoula
+  collection-title: "Findings of the Association for Computational Linguistics: EMNLP 2026"
+  publisher:
+    name: "Association for Computational Linguistics"
+  year: 2026
+  start: 46192
+  end: 46226
+  url: "https://aclanthology.org/2026.findings-emnlp.2160/"
+references:
+  - type: article
+    title: "BEiTScore: Reference-free Image Captioning Evaluation with an Efficient Cross-Encoder Model"
+    authors:
+      - family-names: Gomes
+        given-names: Gonçalo
+      - family-names: Martins
+        given-names: Bruno
+      - family-names: Zerva
+        given-names: Chrysoula
+    journal: "arXiv preprint"
+    year: 2026
+    identifiers:
+      - type: other
+        value: "arXiv:2605.21728"
+    url: "https://arxiv.org/abs/2605.21728"

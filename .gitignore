@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+
+# Data, weights and run outputs (never commit these)
+/data/
+/models/
+/outputs/
+/finetuning/
+*.pkl
+*.pt
+*.pth
+*.safetensors
+*.npz
+*.spm
+
+
+# Figures produced by the scripts
+*.png
+*.pdf
+!assets/*.pdf
+!assets/*.png
+
+# Local configuration (copy of configs/paths.example.sh with your own paths)
+configs/paths.sh
+
+# Secrets
+.env
+*.token
