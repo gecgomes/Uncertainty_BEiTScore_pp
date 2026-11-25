@@ -203,15 +203,6 @@ The scripts read these files under `$BEITSCORE_DATA`.
 - Both backbones use patch size 16 at 480 × 480 pixels; "B/32" and "L/14" in Table 2 and Figure 6 refer to BEiTScore++-B and BEiTScore++-L.
 - The bias offset of −2.5 is probit-scaled rather than subtracted uniformly: the lower heads start between 1.58 and 2.5 above the median head's bias and the upper heads between 1.58 and 2.5 below it, so the initial intervals are narrow (see `quantile_bias_offsets` in `beitscore/models/checkpoint.py`).
 
-## Tests
-
-```bash
-pip install -e ".[dev]"
-pytest
-```
-
-The tests run on CPU in about a minute, with a tiny BEiT-3 configuration and synthetic data.
-
 ## Citation
 
 ```bibtex
