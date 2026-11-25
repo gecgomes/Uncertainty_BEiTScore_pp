@@ -1,0 +1,29 @@
+# Pinned to the environment used for the paper. Install PyTorch first for your
+# CUDA version (https://pytorch.org), then: pip install -r requirements.txt
+# Prefer `pip install -e ".[data]"`, which installs the same pins.
+torch==2.8.0
+torchvision==0.23.0
+timm==0.6.13
+torchscale==0.3.0
+transformers==4.57.1
+sentencepiece==0.2.0
+numpy==2.1.2
+scipy==1.15.3
+pandas==2.3.1
+scikit-learn==1.7.2
+joblib==1.5.1
+pillow==11.3.0
+opencv-python-headless==4.12.0.88
+tqdm==4.67.1
+safetensors>=0.4
+
+# downloading the released models and data
+huggingface-hub==0.36.0
+requests==2.32.4
+pyarrow>=14
+imagehash==4.3.2
+kagglehub>=0.3      # Flickr30k (Stage 1) and Flickr8K images from Kaggle
+
+# downloading the evaluation benchmarks
+datasets>=2.19
+gdown>=5            # Flickr8K archives of CLIPScore (Google Drive)

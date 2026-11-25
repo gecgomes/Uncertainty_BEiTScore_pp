@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "beitscore"
+version = "0.1.0.dev0"
+description = "BEiTScore and BEiTScore++: reference-free image captioning evaluation with BEiT-3, with calibrated confidence intervals"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Gonçalo Gomes" },
+    { name = "Bruno Martins" },
+    { name = "Chrysoula Zerva" },
+]
+# Versions match the environment the paper was run in (beit_requirements.txt).
+dependencies = [
+    "torch==2.8.0",
+    "torchvision==0.23.0",
+    "timm==0.6.13",
+    "torchscale==0.3.0",
+    "transformers==4.57.1",
+    "sentencepiece==0.2.0",
+    "numpy==2.1.2",
+    "scipy==1.15.3",
+    "pandas==2.3.1",
+    "scikit-learn==1.7.2",
+    "joblib==1.5.1",
+    "pillow==11.3.0",
+    "opencv-python-headless==4.12.0.88",
+    "tqdm==4.67.1",
+    "safetensors>=0.4",
+]
+
+[project.optional-dependencies]
+# downloading the released models and data, and getting the images
+data = ["huggingface-hub==0.36.0", "requests==2.32.4", "pyarrow>=14", "imagehash==4.3.2", "datasets>=2.19", "kagglehub>=0.3", "gdown>=5"]
+dev = ["pytest==8.4.1", "ruff>=0.8", "pyarrow>=14", "imagehash==4.3.2", "huggingface-hub==0.36.0", "requests==2.32.4"]
+
+[project.urls]
+"BEiTScore++ paper" = "https://aclanthology.org/2026.findings-emnlp.2160/"
+"BEiTScore paper" = "https://arxiv.org/abs/2605.21728"
+Repository = "https://github.com/gecgomes/Uncertainty_BEiTScore_pp"
+
+[tool.setuptools.packages.find]
+include = ["beitscore*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = ["slow: end-to-end checks that take more than a few seconds"]
+filterwarnings = ["ignore::FutureWarning", "ignore::DeprecationWarning", "ignore::UserWarning"]
