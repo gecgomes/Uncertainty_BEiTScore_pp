@@ -74,6 +74,19 @@ def save(path, data):
     os.replace(path + ".part", path)
 
 
+def link(src, dest):
+    """Hard-link src to dest (the same file under two names, no extra space); False when the two
+    folders are on different file systems, so the caller writes a copy."""
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    if os.path.lexists(dest):
+        os.remove(dest)
+    try:
+        os.link(src, dest)
+        return True
+    except OSError:
+        return False
+
+
 def phash_distance(data, expected_hex):
     try:
         import imagehash
@@ -145,12 +158,14 @@ def get_one(row, out_dir, archives, max_phash_distance, fetch_fn):
     dest = os.path.join(out_dir, row.source, row.file_name)
     if is_verified(dest, row.sha256):
         return row.image_id, "ok", dest
-    data = None
+    data, candidate = None, None
     if row.source in archives:
         candidate = os.path.join(archives[row.source], row.native_image_id)  # name inside the archive
         if os.path.exists(candidate):
             with open(candidate, "rb") as f:
                 data = f.read()
+            if sha256(data) == row.sha256 and link(candidate, dest):  # same file: no second copy on disk
+                return row.image_id, "ok", dest
     if data is None and isinstance(row.url, str):
         data = fetch_fn(row.url)
     if data is None:

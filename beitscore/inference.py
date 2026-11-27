@@ -167,7 +167,7 @@ def score_frame(dataset, scores, gt=None):
         "candidates": items["candidates"].tolist(),
         "data_type": items["data_type"].tolist(),
     })
-    for col in ("pair_id", "foil", "tag_combination", "cluster", "dataset"):
+    for col in ("pair_id", "foil", "tag_combination", "cluster", "dataset", "subset", "desc", "rel", "flu"):
         if col in items.columns:
             df[col] = items[col].tolist()
     if gt is not None:

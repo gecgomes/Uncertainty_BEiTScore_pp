@@ -1,14 +1,16 @@
 # Preparing the evaluation benchmarks
 
 This guide downloads every evaluation benchmark of BEiTScore and BEiTScore++ from its authors and converts it into the file the evaluation reads.
-All commands run from the repository root, after `pip install -e ".[data]"` and `source configs/paths.sh` (see `configs/paths.example.sh`).
+All commands run from the repository root, after `pip install -e ".[data]"` and `source configs/paths.sh`.
 
 ## Benchmarks used in the papers
 
 | Paper | Correlation with human judgments | Incorrect captions and compositionality |
 |---|---|---|
-| BEiTScore | VICR, Polaris, Nebula, Flickr8K-Expert, Flickr8K-CF, Composite, GenAI-Bench | nocaps-FOIL, VALSE, SugarCrepe, Winoground, LongCapVLCP, CapArena |
+| BEiTScore | VICR, Polaris, Nebula, Flickr8K-Expert, Flickr8K-CF, Composite, GenAI-Bench, LongCap-Arena | nocaps-FOIL, VALSE, SugarCrepe, Winoground, LongCapVLCP, CapArena |
 | BEiTScore++ | VICR, Polaris, Nebula, Flickr8K-Expert, Composite | |
+
+LongCap-Arena is the long-caption benchmark of VELA (see [below](#longcap-arena-vela)).
 
 ## Where the files go
 
@@ -29,9 +31,10 @@ $BEITSCORE_DATA/
   winoground/winoground.pkl              winoground/images/
   longcapvlcp/longcapvlcp.pkl            longcapvlcp/images/     (scripts/download_release.py longcapvlcp)
   caparena/caparena_annots_eval.json     caparena/images/        (read by scripts/beitscore_v1/caparena.py)
+  vela/vela.pkl                          vela/images/            (LongCap-Arena; images of its two test sets only)
 ```
 
-These names are also the `--benchmark` values of `scripts/evaluate.py` (vicr, polaris, nebula, flickr8k-expert, flickr8k-cf, composite, genai) and `scripts/beitscore_v1/evaluate_errors.py` (nocaps-foil, valse, sugarcrepe, winoground, longcapvlcp).
+These names are also the `--benchmark` values of `scripts/evaluate.py` (vicr, polaris, nebula, flickr8k-expert, flickr8k-cf, composite, genai, vela) and `scripts/beitscore_v1/evaluate_errors.py` (nocaps-foil, valse, sugarcrepe, winoground, longcapvlcp).
 Images shared by two benchmarks (Flickr8K) are hard links to the same files, so they take the space once.
 
 ## Step 1: VICR, by hand
@@ -54,7 +57,7 @@ The rest of the supplementary material is not needed and can be deleted.
 ## Step 2: download and convert everything else
 
 ```bash
-python scripts/prepare_data/benchmarks.py download                       # every benchmark of both papers
+python scripts/prepare_data/benchmarks.py download                       # every benchmark of both papers (or: download all)
 python scripts/prepare_data/benchmarks.py download valse composite       # or some of them
 ```
 
@@ -71,12 +74,13 @@ python scripts/prepare_data/benchmarks.py download valse composite       # or so
 | Winoground | Hugging Face `facebook/winoground` (gated: accept the terms on its page and `huggingface-cli login` first) | in the dataset |
 | LongCapVLCP | `python scripts/download_release.py longcapvlcp` | in the release |
 | CapArena | `caparena_annots_eval.json` from the links of njucckevin/CapArena | the DOCCI image archive of the same page (only the needed files are extracted) |
+| LongCap-Arena (`vela`) | the 12 rating files of `data/` in Ka2ukiMatsuda/VELA (pinned commit) | Hugging Face `Ka2ukiMatsuda/LongCap-Arena`, only the splits of the two test sets; or `sa_000138.tar` of SA-1B with `--archive vela_images=FILE` |
 
 Everything is downloaded to `$BEITSCORE_DATA/downloads/` first, including the Hugging Face caches of Polaris, Nebula, GenAI-Bench and Winoground.
 When every requested benchmark is done, that folder is deleted, so no data is kept twice; after a failure it is kept, so that the next run does not download it again (`--keep_downloads` always keeps it).
 The Flickr30k images used by Composite stay in `$BEITSCORE_DATA/flickr30k/Images`, the folder the Stage-1 data also uses.
 At the end the command prints one line per benchmark: done, failed (with the error), or manual (with what to do).
-If an archive link stops working, download the file by hand and pass it with `--archive KEY=FILE` (keys: `composite`, `visual7w`, `SWiG`, `VisDial_v1.0`, `Flickr8k_Dataset.zip`, `Flickr8k_text.zip`, `caparena` and `caparena_images`, and `vicr` for a `VICR.csv` kept elsewhere).
+If an archive link stops working, download the file by hand and pass it with `--archive KEY=FILE` (keys: `composite`, `visual7w`, `SWiG`, `VisDial_v1.0`, `Flickr8k_Dataset.zip`, `Flickr8k_text.zip`, `caparena` and `caparena_images`, `vela_images` for SA-1B's `sa_000138.tar`, and `vicr` for a `VICR.csv` kept elsewhere).
 
 Choices that follow the papers:
 
@@ -92,6 +96,7 @@ python scripts/prepare_data/benchmarks.py check
 ```
 
 It loads each benchmark the way the evaluation does, reports the test size, the mean number of ratings per pair and image files that cannot be found, and compares the correlation benchmarks with the sizes in the papers (VICR 3,161 pairs with 4.4 ratings each, Polaris 8,726 with 3.0, Nebula 3,298 with 1.0, Flickr8K-Expert 5,664 with 3.0, Composite 13,146 with 1.0).
+For `vela` it reports the pairs of TestA and TestB (98 and 108, rated on all three dimensions; the VELA paper counts 294 and 324 ratings, three per pair).
 A line marked `[check]` differs from the papers or has missing images.
 `benchmarks.py compare --reference <other data folder>` compares the prepared benchmarks row by row with those of another data folder.
 
@@ -107,6 +112,20 @@ Both are downloaded by `benchmarks.py download` with the other benchmarks of the
 
 - GenAI-Bench (Li et al., 2024) comes from the Hugging Face dataset `BaiqiL/GenAI-Bench`: 1,600 prompts, one image from each of six text-to-image models (9,600 pairs), with three 1-to-5 alignment ratings each. The images are written as `genai/images/<model>_<prompt index>.png`.
 - CapArena (Cheng et al., 2025) comes from the links of github.com/njucckevin/CapArena: the human battle annotations (`caparena_annots_eval.json`, 6,523 pairwise battles) and the DOCCI images they use, in `$BEITSCORE_DATA/caparena/`. It is evaluated by its own script, `python scripts/beitscore_v1/caparena.py --model_size large`. If the box.nju.edu.cn links fail, download the two files by hand from that GitHub page and pass them with `--archive caparena=<annotation file> caparena_images=<image archive>`.
+
+## LongCap-Arena (VELA)
+
+LongCap-Arena (Matsuda et al., "VELA: An LLM-Hybrid-as-a-Judge Approach for Evaluating Long Image Captions", EMNLP 2025) rates long captions of SA-1B images on three dimensions: descriptiveness (`desc`), relevance (`rel`) and fluency (`flu`), each in [0, 1].
+
+```bash
+python scripts/prepare_data/benchmarks.py download vela
+python scripts/evaluate.py --model_size large --benchmark vela
+```
+
+- The ratings come from the authors' repository (github.com/Ka2ukiMatsuda/VELA, `data/`), one CSV file per dimension and group. The three files of a group are joined on the image and the caption, and only captions rated on all three dimensions are kept: 2,532 train, 275 val, 98 `dci_val` and 108 `dci_test` pairs.
+- The evaluation groups are the two test sets of the VELA paper, reported separately: `dci_val` (TestA) and `dci_test` (TestB). The `test` group of the authors' files is not described in the paper and is not used.
+- Only the images of the two test sets are downloaded (206 images), from the authors' Hugging Face copy of the benchmark; with `--archive vela_images=sa_000138.tar` they are taken from the SA-1B archive the authors point to instead.
+- `scripts/evaluate.py --benchmark vela` correlates the metric with each rating and with three single scores that combine them, defined in `beitscore/vela.py`. The principal component they use is fitted on the ratings of the train and val groups, which need no metric score.
 
 `ratings` reads CSV, TSV, JSON, JSONL, Parquet or pickle files, with one row per judgment or one row per pair whose score column holds a list of ratings; `pairs` reads a table of (image, correct caption, incorrect caption).
 

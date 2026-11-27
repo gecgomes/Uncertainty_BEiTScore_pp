@@ -20,14 +20,16 @@ dist/
 *.spm
 
 
+# Code and checkpoints of the baselines, cloned and downloaded by their setup scripts
+baselines/encoders/repos/
+baselines/fleur/FLEUR/
+baselines/expert/EXPERT/
+
 # Figures produced by the scripts
 *.png
 *.pdf
 !assets/*.pdf
 !assets/*.png
-
-# Local configuration (copy of configs/paths.example.sh with your own paths)
-configs/paths.sh
 
 # Secrets
 .env

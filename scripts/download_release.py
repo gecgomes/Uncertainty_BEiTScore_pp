@@ -1,5 +1,5 @@
 """Download the released models and data from the Hugging Face Hub into the folders the
-code reads ($BEITSCORE_MODELS and $BEITSCORE_DATA, see configs/paths.example.sh).
+code reads ($BEITSCORE_MODELS and $BEITSCORE_DATA, see configs/paths.sh).
 
     source configs/paths.sh
     python scripts/download_release.py models                     # BEiTScore and BEiTScore++, base and large
@@ -16,12 +16,18 @@ What goes where:
   stage1       <namespace>/beitscore-stage1 -> $BEITSCORE_DATA/release/stage1/, then the images are
                extracted (PixelProse) or downloaded (COCO, Open Images, TextCaps) and checked, Flickr30k
                is downloaded from Kaggle into $BEITSCORE_DATA/flickr30k/Images (or taken from
-               --flickr30k), and
+               --flickr30k) and linked into Stage1/images/, and
                $BEITSCORE_DATA/Stage1/stage1.pkl is written (what scripts/train.py reads)
   stage2       <namespace>/beitscore-stage2 -> $BEITSCORE_DATA/release/stage2/, then the images are
                extracted (Polaris, Nebula, EvalMuse-40K) or downloaded (COCO) and checked, Flickr8K
                comes from its archive, and $BEITSCORE_DATA/stage2/stage2.pkl is written (what
                scripts/train.py --benchmark regression|quant and scripts/beitscore_pp/calibrate.py read)
+
+$BEITSCORE_DATA/release/<name>/ holds the raw download from the Hub (the tables and the shards
+with the embedded images). Once the data file is written it is deleted, since every image it
+holds has been written out as a file (--keep_release keeps it). Images taken from a local folder
+(Flickr30k, Flickr8K) are hard-linked into the extracted folders when they are on the same disk,
+so they take no extra space; $BEITSCORE_DATA/flickr30k/Images stays, since Composite uses it too.
 
 The Stage-1 images take about 150 GB on disk (75 GB downloaded from the Hub, the rest from
 the original sources). Rerunning resumes: finished files are not downloaded again.
@@ -74,6 +80,27 @@ def get_images(release_dir, out_dir, out_file, table, archives, workers):
     return module.main(module.get_args(argv))
 
 
+def cleanup(release, args, result):
+    """Delete the raw release download once its data file is written, unless an image embedded in
+    it failed its checksum (a corrupted shard, to download again)."""
+    import shutil
+
+    if args.keep_release:
+        return
+    report = result[0]
+    bad = int((report["embedded"] & (report["status"] != "ok")).sum())
+    if bad:
+        print(f"Keeping {release}: {bad} embedded images failed their checksum; delete the affected shards "
+              f"in {release}/images/ and run the command again")
+        return
+    if os.path.isdir(release):
+        shutil.rmtree(release)
+        print(f"Removed {release} (its images are in the extracted folder; --keep_release keeps it)")
+    parent = os.path.dirname(release)
+    if os.path.isdir(parent) and not os.listdir(parent):
+        os.rmdir(parent)
+
+
 def download_models(args):
     sizes = [f"{s}/*" for s in args.sizes]
     snapshot("beitscore", os.path.join(MODELS_ROOT, "beitscore"), args.namespace,
@@ -89,8 +116,9 @@ def download_longcapvlcp(args):
     release = os.path.join(DATA_ROOT, "release", "longcapvlcp")
     if snapshot("longcapvlcp", release, args.namespace) is None:
         return
-    get_images(release, os.path.join(DATA_ROOT, "longcapvlcp", "images"),
-               os.path.join(DATA_ROOT, "longcapvlcp", "longcapvlcp.pkl"), "longcapvlcp", {}, args.workers)
+    result = get_images(release, os.path.join(DATA_ROOT, "longcapvlcp", "images"),
+                        os.path.join(DATA_ROOT, "longcapvlcp", "longcapvlcp.pkl"), "longcapvlcp", {}, args.workers)
+    cleanup(release, args, result)
 
 
 FLICKR30K_HANDLE = "adityajn105/flickr30k"
@@ -124,21 +152,26 @@ def get_flickr30k(target=FLICKR30K_DIR):
         return None
     print(f"Downloading Flickr30k from {FLICKR30K_URL} (about 4 GB)")
     try:
-        images = _find_images_folder(kagglehub.dataset_download(FLICKR30K_HANDLE))
+        root = kagglehub.dataset_download(FLICKR30K_HANDLE)
+        images = _find_images_folder(root)
         if images is None:  # the cached copy was already moved out by an earlier run
-            images = _find_images_folder(kagglehub.dataset_download(FLICKR30K_HANDLE, force_download=True))
+            root = kagglehub.dataset_download(FLICKR30K_HANDLE, force_download=True)
+            images = _find_images_folder(root)
     except Exception as exc:  # noqa: BLE001  (network, authentication, ...)
         print(f"Flickr30k download failed: {exc}", file=sys.stderr)
         return None
-    cache = "the Kaggle cache"
     if images is None:
-        print(f"No .jpg files found in the Kaggle download at {cache}", file=sys.stderr)
+        print(f"No .jpg files found in the Kaggle download at {root}", file=sys.stderr)
         return None
-    os.makedirs(os.path.dirname(target), exist_ok=True)
     if os.path.lexists(target):
         os.remove(target) if os.path.islink(target) else shutil.rmtree(target)
-    shutil.move(images, target)  # out of the kagglehub cache, so the 4 GB are not kept twice
-    print(f"Flickr30k images moved to {target}")
+    os.makedirs(target)
+    # only the .jpg files of that folder: the archive also holds a second copy of them in a subfolder
+    for name in os.listdir(images):
+        if name.lower().endswith(".jpg"):
+            shutil.move(os.path.join(images, name), os.path.join(target, name))
+    shutil.rmtree(root, ignore_errors=True)  # the rest of the Kaggle download, so nothing is kept twice
+    print(f"Flickr30k images moved to {target} ({len(os.listdir(target)):,} files)")
     return target
 
 
@@ -152,8 +185,9 @@ def download_stage1(args):
         print(f"WARNING: no Flickr30k folder; Flickr30k images will be missing. Download {FLICKR30K_URL}, unzip it "
               f"and pass its Images/ folder with --flickr30k (or put it in {FLICKR30K_DIR}).")
     os.makedirs(os.path.join(DATA_ROOT, "Stage1"), exist_ok=True)
-    get_images(release, os.path.join(DATA_ROOT, "Stage1", "images"), os.path.join(DATA_ROOT, "Stage1", "stage1.pkl"),
-               "stage1", archives, args.workers)
+    result = get_images(release, os.path.join(DATA_ROOT, "Stage1", "images"),
+                        os.path.join(DATA_ROOT, "Stage1", "stage1.pkl"), "stage1", archives, args.workers)
+    cleanup(release, args, result)
 
 
 FLICKR8K_DRIVE_ID = "1WNY8pV-u8xtBYBVal03qwjQs4VKurUZn"  # Flickr8k_Dataset.zip, the archive CLIPScore uses
@@ -203,14 +237,18 @@ def download_stage2(args):
         print(f"WARNING: no Flickr8K folder; its images will be missing. Pass the folder with the Flickr8K .jpg "
               f"files with --flickr8k (or put it in {FLICKR8K_DIR}).")
     os.makedirs(os.path.join(DATA_ROOT, "stage2"), exist_ok=True)
-    get_images(release, os.path.join(DATA_ROOT, "stage2", "images"), os.path.join(DATA_ROOT, "stage2", "stage2.pkl"),
-               "stage2", archives, args.workers)
+    result = get_images(release, os.path.join(DATA_ROOT, "stage2", "images"),
+                        os.path.join(DATA_ROOT, "stage2", "stage2.pkl"), "stage2", archives, args.workers)
+    cleanup(release, args, result)  # Flickr8K stays: the flickr8k-expert and flickr8k-cf benchmarks read it
 
 
 def get_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("what", nargs="+", choices=["models", "longcapvlcp", "stage1", "stage2", "all"])
     parser.add_argument("--sizes", nargs="+", default=["base", "large"], choices=["base", "large"])
+    parser.add_argument("--keep_release", action="store_true",
+                        help="Keep $BEITSCORE_DATA/release/<name>/ (the raw download, with the images embedded) "
+                             "once the data file is written")
     parser.add_argument("--flickr30k", default=None,
                         help="Folder with the Flickr30k .jpg files (for stage1). Default: $BEITSCORE_DATA/flickr30k/Images, "
                              "downloaded from Kaggle when it is not there")
@@ -226,9 +264,7 @@ def get_args(argv=None):
 
 def main(args):
     what = {"models", "longcapvlcp", "stage1", "stage2"} if "all" in args.what else set(args.what)
-    if not os.environ.get("BEITSCORE_DATA") or not os.environ.get("BEITSCORE_MODELS"):
-        print("WARNING: BEITSCORE_DATA or BEITSCORE_MODELS is not set; run `source configs/paths.sh` first",
-              file=sys.stderr)
+    print(f"Data: {DATA_ROOT}\nModels: {MODELS_ROOT}")
     if "models" in what:
         download_models(args)
     if "longcapvlcp" in what:

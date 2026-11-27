@@ -4,11 +4,19 @@
     python scripts/evaluate.py --model_size large --benchmark vicr
     # BEiTScore++ with its calibration (written by scripts/beitscore_pp/calibrate.py)
     python scripts/evaluate.py --model_size large --quant --benchmark vicr --calibration auto
+    # LongCap-Arena of VELA (TestA and TestB)
+    python scripts/evaluate.py --model_size large --benchmark vela
 
 Prints tau-b, tau-c and rho for each subset (data_type) of the benchmark and, for
 BEiTScore++, coverage, sharpness, UPS (and its rank variants) and the quantile ECE.
 Writes the raw scores to $BEITSCORE_OUTPUT/scores/<model id>/<benchmark>_test.pkl and
 the metrics to $BEITSCORE_OUTPUT/results/<model id>/<benchmark>.csv.
+
+LongCap-Arena (--benchmark vela) is reported on TestA (dci_val) and TestB (dci_test) separately, against
+each target of --vela_targets (beitscore/vela.py): the three rated dimensions and three single
+scores that combine them with a principal component fitted on the ratings of the train and val
+groups. For BEiTScore++ the median is correlated; interval metrics are not reported on VELA,
+whose targets are not ratings on one scale.
 
 Error detection (nocaps-FOIL, VALSE, SugarCrepe, Winoground, LongCapVLCP) is in
 scripts/beitscore_v1/evaluate_errors.py, and CapArena in scripts/beitscore_v1/caparena.py.
@@ -18,8 +26,9 @@ import os
 
 import pandas as pd
 
-from beitscore import metrics
-from beitscore.data.datasets import CORRELATION_BENCHMARKS, BEiTDataset, canonical_benchmark, get_sentencepiece_model_for_beit3
+from beitscore import metrics, vela
+from beitscore.data.datasets import (CORRELATION_BENCHMARKS, BEiTDataset, benchmark_file, canonical_benchmark,
+                                     get_sentencepiece_model_for_beit3)
 from beitscore.inference import (SENTENCEPIECE_MODEL, add_model_args, build_model, output_dir, predict,
                                  print_timing, resolve_model, save_scores, score_frame, select_interval)
 from beitscore.paths import DATA_ROOT
@@ -27,13 +36,13 @@ from beitscore.pp.calibration.clustered import IDENTITY, Calibration
 from beitscore.utils import set_seed
 
 
-
-
 def get_args(argv=None):
     parser = argparse.ArgumentParser("Correlation with human judgements")
     add_model_args(parser)
-    parser.add_argument("--benchmark", type=canonical_benchmark, choices=CORRELATION_BENCHMARKS, default="vicr",
-                        help="vicr, polaris, nebula, flickr8k-expert, flickr8k-cf, composite, genai")
+    parser.add_argument("--benchmark", type=canonical_benchmark, choices=CORRELATION_BENCHMARKS + ["vela"],
+                        default="vicr", help="vicr, polaris, nebula, flickr8k-expert, flickr8k-cf, composite, genai, vela")
+    parser.add_argument("--vela_targets", nargs="+", choices=vela.TARGETS, default=list(vela.TARGETS),
+                        help="VELA only: human scores to correlate with (default: all)")
     parser.add_argument("--base_path", default=DATA_ROOT, help="Root directory of the datasets")
     parser.add_argument("--calibration", default=None,
                         help="BEiTScore++ only: a calibration.json, or 'auto' for the one written by "
@@ -81,6 +90,31 @@ def evaluate_subset(df, quant, calibration, confidence_levels):
     return out
 
 
+def evaluate_vela(df, args, quant, calibration):
+    """Correlations on each evaluation group of VELA against each target, with the principal
+    component fitted on the ratings of the train and val groups of vela.pkl."""
+    import joblib
+
+    fit = vela.fit_from_frame(joblib.load(benchmark_file("vela", args.base_path)))
+    if quant:
+        qcols = sorted(c for c in df.columns if c.startswith("q") and c[1:].isdigit())
+        score = calibration.apply(*select_interval(df[qcols].to_numpy(dtype=float)))[1]
+    else:
+        score = df["score"].to_numpy(dtype=float)
+    print("PCA fitted on {fit_groups}: component {component}, weights {weights}".format(**vela.describe_fit(fit)))
+    rows = []
+    for group in vela.EVAL_GROUPS:
+        sub = (df["subset"] == group).to_numpy()
+        human = vela.targets(vela.ratings(df[sub]), fit)
+        print(f"=== vela / {vela.GROUP_NAMES[group]} ({group}, {int(sub.sum())} pairs) ===")
+        for target in args.vela_targets:
+            res = metrics.correlations(score[sub], human[target])
+            rows.append({"benchmark": "vela", "data_type": vela.GROUP_NAMES[group], "target": target,
+                         "n": int(sub.sum()), **res})
+            print(f"{target:22s} " + "  ".join(f"{k}: {v:.3f}" for k, v in res.items()))
+    return rows
+
+
 def main(args):
     set_seed(args.seed)
     checkpoint, mid, quant = resolve_model(args)
@@ -93,6 +127,14 @@ def main(args):
     scores, times = predict(model, dataset, args.device, desc=args.benchmark)
     df = score_frame(dataset, scores, gt=dataset.gt_scores)
     save_scores(df, mid, f"{args.benchmark}_test")
+
+    if args.benchmark == "vela":
+        rows = evaluate_vela(df, args, quant, calibration)
+        print_timing(times)
+        path = os.path.join(output_dir("results", mid), "vela.csv")
+        pd.DataFrame(rows).to_csv(path, index=False)
+        print(f"Metrics written to {path}")
+        return rows
 
     levels = list(getattr(model, "quantiles", []))
     rows = []

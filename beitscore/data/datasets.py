@@ -23,6 +23,7 @@ NOMINAL_SCALES = {
     "nebula": (0.0, 1.0),
     "flickr8k-expert": (1.0, 4.0),
     "composite": (1.0, 5.0),
+    "vela": (0.0, 1.0),
 }
 
 # Evaluation benchmarks: each lives in $BEITSCORE_DATA/<name>/<name>.pkl with its images in
@@ -41,6 +42,7 @@ BENCHMARKS = {
     "sugarcrepe": ("foil", False),
     "winoground": ("foil", True),
     "longcapvlcp": ("foil", False),
+    "vela": ("vela", False),  # LongCap-Arena of VELA, see beitscore/vela.py
 }
 CORRELATION_BENCHMARKS = [n for n, (task, _) in BENCHMARKS.items() if task == "correlation"]
 ERROR_BENCHMARKS = [n for n, (task, _) in BENCHMARKS.items() if task == "foil"]
@@ -103,6 +105,23 @@ def _dataset_preprocess(dataset, data_path, flickr_flag):
 
 
 
+def _vela_split(df, base_path, split):
+    """Rows of vela.pkl for a split: "test" gives the evaluation groups of the VELA paper (dci_val,
+    reported as TestA, and dci_test, as TestB), any other value the group of that name. The three
+    ratings stay in desc, rel and flu, and the single scores built from them are computed by
+    scripts/evaluate.py (beitscore.vela); human_scores holds their mean only so that the dataset
+    has a target."""
+    from ..vela import DIMS, EVAL_GROUPS
+
+    groups = EVAL_GROUPS if split == "test" else (split,)
+    df = df[df["subset"].isin(groups)].reset_index(drop=True)
+    df["image_path"] = [p if os.path.isabs(p) else os.path.join(base_path, p) for p in df["image_path"].astype(str)]
+    df["candidates"] = df["caption"]
+    df["human_scores"] = df[list(DIMS)].mean(axis=1)
+    df["pair_id"] = range(len(df))
+    return df
+
+
 def get_data(benchmark_name, base_path, split, seed=0):
 
     benchmark_name = canonical_benchmark(benchmark_name)
@@ -129,6 +148,9 @@ def get_data(benchmark_name, base_path, split, seed=0):
     df = joblib.load(benchmark_path)
     if task in ["regression", "stage1"]:
         df = df.sample(frac=1, random_state=seed)
+
+    if task == "vela":
+        return _vela_split(df, base_path, split), task, wino_tag
 
     if wino_tag:
         df["tag_combination"] = df["pair_id"].apply(lambda x: x[:2])
@@ -272,7 +294,7 @@ class BEiTDataset(torch.utils.data.Dataset):
             df_false["foil"] = True
             df = pd.concat([df_true,df_false], axis=0).reset_index(drop=True)
         self.items = df
-        if (task == "foil") or (task == "correlation"):
+        if task in ("foil", "correlation", "vela"):
             self.items["candidates"] = self.items["caption"].to_list()
             if task == "foil":
                 self.items["is_correct_caption"] = self.items["foil"].apply(lambda x: x == False).tolist()

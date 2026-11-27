@@ -1,16 +1,18 @@
 """Download the evaluation benchmarks of BEiTScore and BEiTScore++ from their authors and
 convert them into the files that beitscore.data.datasets.get_data reads. See docs/benchmarks.md.
 
-    python scripts/prepare_data/benchmarks.py download                 # every benchmark of both papers
+    python scripts/prepare_data/benchmarks.py download                 # every benchmark of both papers (or: download all)
     python scripts/prepare_data/benchmarks.py download valse composite # or some of them
     python scripts/prepare_data/benchmarks.py check                    # sizes and missing images
     python scripts/prepare_data/benchmarks.py compare --reference DIR  # against another data folder
 
 Every benchmark is written to $BEITSCORE_DATA/<name>/<name>.pkl, with its images in
 $BEITSCORE_DATA/<name>/images/, where <name> is one of: vicr, polaris, nebula, flickr8k-expert,
-flickr8k-cf, composite, genai, nocaps-foil, valse, sugarcrepe, winoground. CapArena, which has its
+flickr8k-cf, composite, genai, nocaps-foil, valse, sugarcrepe, winoground, vela. CapArena, which has its
 own evaluation script (scripts/beitscore_v1/caparena.py), goes to $BEITSCORE_DATA/caparena/. Downloads go to $BEITSCORE_DATA/downloads/, which is
 deleted once every requested benchmark is done (--keep_downloads keeps it).
+
+vela is LongCap-Arena, the long-caption benchmark of VELA (Matsuda et al., EMNLP 2025).
 
 VICR cannot be downloaded automatically: put Dataset/VICR.csv of its supplementary material
 (https://openreview.net/forum?id=xKYtTmtyI2) in $BEITSCORE_DATA/vicr/VICR.csv first.
@@ -52,6 +54,10 @@ EXPECTED = {
     "vicr": (3161, 4.4), "polaris": (8726, 3.0), "nebula": (3298, 1.0),
     "flickr8k-expert": (5664, 3.0), "composite": (13146, 1.0), "genai": (9600, 3.0),
 }
+
+# VELA evaluation groups (pairs rated on all three dimensions; the paper counts 294 and 324 ratings,
+# three per pair)
+VELA_EXPECTED = {"dci_val": 98, "dci_test": 108}
 
 SPLIT_NAMES = {"train": "train", "training": "train", "val": "val", "valid": "val", "validation": "val",
                "dev": "val", "test": "test"}
@@ -412,6 +418,12 @@ def check(names, data_root=DATA_ROOT):
         missing = sum(not os.path.exists(p) for p in paths)
         before = problems
         line = f"{name}: {len(df)} test rows, {len(paths)} images"
+        if task == "vela":
+            sizes = df.groupby("subset", sort=False).size().to_dict()
+            line += f", {sizes}"
+            if sizes != VELA_EXPECTED:
+                line += f" (paper: {VELA_EXPECTED})"
+                problems += 1
         if task == "correlation":
             n = df["human_scores"].map(lambda s: len(s) if isinstance(s, (list, tuple, np.ndarray)) else 1)
             line += f", {n.mean():.2f} ratings per pair"
@@ -425,6 +437,83 @@ def check(names, data_root=DATA_ROOT):
             problems += 1
         print(("[ok]      " if problems == before else "[check]   ") + line)
     return problems
+
+
+# --------------------------------------------------------------------------- VELA (LongCap-Arena)
+def vela_ratings(folder):
+    """One row per image-caption pair rated on all three dimensions, for every group of
+    VELA_GROUPS: the three CSV files of a group are joined on (imgid, cand), exactly."""
+    from beitscore.vela import DIMS, GROUP_NAMES
+
+    frames = []
+    for group in VELA_GROUPS:
+        tables = {d: pd.read_csv(os.path.join(folder, f"{d}_{group}.csv")) for d in DIMS}
+        merged = None
+        for d, t in tables.items():
+            t = t.rename(columns={"score": d})
+            keep = ["imgid", "cand", d] + (["refs"] if merged is None and "refs" in t.columns else [])
+            merged = t[keep] if merged is None else merged.merge(t[["imgid", "cand", d]], on=["imgid", "cand"],
+                                                                     how="inner", validate="one_to_one")
+        merged["subset"] = group
+        merged["data_type"] = GROUP_NAMES.get(group, group)
+        sizes = ", ".join(f"{d} {len(t)}" for d, t in tables.items())
+        print(f"vela {group}: {sizes} rated captions, {len(merged)} rated on all three")
+        frames.append(merged)
+    df = pd.concat(frames, ignore_index=True).rename(columns={"cand": "caption"})
+    if "refs" in df.columns:
+        df["refs"] = df["refs"].map(lambda r: ast.literal_eval(r) if isinstance(r, str) and r.startswith("[") else r)
+    return df
+
+
+def vela_images(needed, data_root, hf_cache, archives):
+    """Write the images of `needed` (SA-1B file names) to $BEITSCORE_DATA/vela/images/ and return
+    the names still missing. From --archive vela_images=sa_000138.tar when given, else from the
+    Hugging Face copy of LongCap-Arena (only the splits of the evaluation groups are downloaded)."""
+    from beitscore.vela import DIMS, EVAL_GROUPS
+
+    folder = os.path.join(data_root, "vela", "images")
+    os.makedirs(folder, exist_ok=True)
+    missing = {n for n in needed if not os.path.exists(os.path.join(folder, n))}
+    if missing and "vela_images" in archives:
+        extract(archives["vela_images"], folder, names=missing)
+        missing = {n for n in missing if not os.path.exists(os.path.join(folder, n))}
+    if missing:
+        from datasets import Image, load_dataset
+
+        for split in [f"{g}.{d}" for d in DIMS for g in EVAL_GROUPS]:
+            if not missing:
+                break
+            ds = load_dataset(VELA_HF, split=split, cache_dir=hf_cache).cast_column("image", Image(decode=False))
+            for row in ds:
+                name = str(row["file_name"]).replace("\\", "/").rsplit("/", 1)[-1]
+                if name in missing:
+                    data = row["image"]["bytes"]
+                    if data is None:
+                        with open(row["image"]["path"], "rb") as f:
+                            data = f.read()
+                    with open(os.path.join(folder, name), "wb") as f:
+                        f.write(data)
+                    missing.discard(name)
+    return sorted(missing)
+
+
+def vela_frame(data_root, downloads, hf_cache, archives):
+    from beitscore.vela import DIMS, EVAL_GROUPS
+
+    folder = os.path.join(downloads, "vela")
+    for group, sub in VELA_GROUPS.items():
+        for d in DIMS:
+            http_download(VELA_RAW.format(repo=VELA_REPO, commit=VELA_COMMIT, folder=sub, dim=d, group=group),
+                          os.path.join(folder, f"{d}_{group}.csv"), quiet=True)
+    df = vela_ratings(folder)
+    df["image_path"] = "vela/images/" + df["imgid"].astype(str)  # relative to $BEITSCORE_DATA
+    needed = set(df.loc[df["subset"].isin(EVAL_GROUPS), "imgid"])  # train and val only give ratings
+    missing = vela_images(needed, data_root, hf_cache, archives)
+    if missing:
+        print(f"vela: {len(missing)} of {len(needed)} images not found (e.g. {missing[0]}); pass "
+              f"--archive vela_images=<sa_000138.tar of SA-1B> to take them from SA-1B")
+    cols = ["image_path", "caption", "desc", "rel", "flu", "subset", "data_type", "imgid"]
+    return df[cols + (["refs"] if "refs" in df.columns else [])]
 
 
 # --------------------------------------------------------------------------- compare
@@ -506,9 +595,17 @@ VICR_CSV = os.path.join("vicr", "VICR.csv")  # relative to $BEITSCORE_DATA
 # imagesdg.wordpress.com/image-to-scene-description-graph, the official page cited by
 # Kilickaya et al. (2017) and the TACL 2025 captioning-evaluation survey.
 COMPOSITE_URL = "https://www.dropbox.com/scl/fi/pktyhl9th4ycluq/AMT_eval.zip?rlkey=r63cr4ff2tx7su6u5ckqk81rn&dl=1"
+# LongCap-Arena of VELA (Matsuda et al., EMNLP 2025): the ratings are the CSV files of the authors'
+# repository (one per dimension and group, joined on image and caption); the images are SA-1B
+# photos, taken from the authors' Hugging Face copy of the benchmark or from sa_000138.tar of SA-1B.
+VELA_REPO = "Ka2ukiMatsuda/VELA"
+VELA_COMMIT = "666e33c74b179028a5caabb3036b1f646503c1bd"
+VELA_RAW = "https://raw.githubusercontent.com/{repo}/{commit}/data/{folder}/{dim}_{group}.csv"
+VELA_HF = "Ka2ukiMatsuda/LongCap-Arena"
+VELA_GROUPS = {"train": "train", "val": "val", "dci_val": "test", "dci_test": "test"}  # group -> folder
 PAPERS = {
     "BEiTScore": ["vicr", "polaris", "nebula", "flickr8k-expert", "flickr8k-cf", "composite", "genai", "nocaps-foil",
-                  "valse", "sugarcrepe", "winoground", "longcapvlcp", "caparena"],
+                  "valse", "sugarcrepe", "winoground", "longcapvlcp", "caparena", "vela"],
     "BEiTScore++": ["vicr", "polaris", "nebula", "flickr8k-expert", "composite"],
 }
 MANUAL = {
@@ -720,13 +817,21 @@ def flickr30k_folder(data_root=DATA_ROOT):
         return target
     import kagglehub
 
-    best = _largest_jpg_folder(kagglehub.dataset_download(FLICKR30K_KAGGLE))
+    root = kagglehub.dataset_download(FLICKR30K_KAGGLE)
+    best = _largest_jpg_folder(root)
     if best is None:  # the cached copy was already moved out (e.g. by download_release.py stage1)
-        best = _largest_jpg_folder(kagglehub.dataset_download(FLICKR30K_KAGGLE, force_download=True))
+        root = kagglehub.dataset_download(FLICKR30K_KAGGLE, force_download=True)
+        best = _largest_jpg_folder(root)
     if best is None:
         raise FileNotFoundError(f"no .jpg files in the Kaggle download of {FLICKR30K_KAGGLE}")
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    shutil.move(best, target)
+    if os.path.lexists(target):
+        os.remove(target) if os.path.islink(target) else shutil.rmtree(target)
+    os.makedirs(target)
+    # only the .jpg files of that folder: the archive also holds a second copy of them in a subfolder
+    for name in os.listdir(best):
+        if name.lower().endswith(".jpg"):
+            shutil.move(os.path.join(best, name), os.path.join(target, name))
+    shutil.rmtree(root, ignore_errors=True)  # the rest of the Kaggle download, so nothing is kept twice
     return target
 
 
@@ -865,6 +970,8 @@ def download_benchmark(name, data_root=DATA_ROOT, archives=None, workers=16, kee
         return save(genai_frame(ds["train"] if "train" in ds else ds[next(iter(ds))], data_root), name, data_root)
     if name == "caparena":
         return caparena_files(data_root, downloads, archives)
+    if name == "vela":
+        return save(vela_frame(data_root, downloads, hf_cache, archives), name, data_root)
     if name == "winoground":
         ds = load_hf("facebook/winoground", token=os.environ.get("HF_TOKEN"), cache_dir=hf_cache)
         return save(winoground_frame(ds["test"], data_root), name, data_root)
@@ -979,11 +1086,12 @@ def get_args(argv=None):
     parser.add_argument("--data_root", default=DATA_ROOT)
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("download", help="Download and convert benchmarks")
-    p.add_argument("names", nargs="*", default=["papers"],
-                   help="Benchmark names, or 'papers' (default: every benchmark of the two papers)")
+    p.add_argument("names", nargs="*", default=["all"],
+                   help="Benchmark names, or 'all' (default: every benchmark of the two papers)")
     p.add_argument("--archive", nargs="+", default=[], metavar="KEY=FILE",
                    help="Use a file you downloaded yourself (keys: vicr (VICR.csv), composite, visual7w, SWiG, "
-                        "VisDial_v1.0, Flickr8k_Dataset.zip, Flickr8k_text.zip, caparena, caparena_images)")
+                        "VisDial_v1.0, Flickr8k_Dataset.zip, Flickr8k_text.zip, caparena, caparena_images, "
+                        "vela_images (sa_000138.tar of SA-1B))")
     p.add_argument("--workers", type=int, default=16)
     p.add_argument("--keep_downloads", action="store_true", help="Keep $BEITSCORE_DATA/downloads afterwards")
     p.add_argument("--keep_all", action="store_true", help="VALSE: keep the instances the annotators did not validate")
@@ -1014,7 +1122,7 @@ def get_args(argv=None):
     p = sub.add_parser("compare", help="Compare the prepared benchmarks with those of another data folder")
     p.add_argument("--reference", required=True, help="Data folder holding the benchmark files used for the papers")
     p.add_argument("--split", default="test")
-    p.add_argument("names", nargs="*", default=[n for n in PAPERS["BEiTScore"] if n not in ("longcapvlcp", "caparena")])
+    p.add_argument("names", nargs="*", default=[n for n in PAPERS["BEiTScore"] if n not in ("longcapvlcp", "caparena", "vela")])
     return parser.parse_args(argv)
 
 
@@ -1022,9 +1130,10 @@ def main(args):
     root = args.data_root
     if args.cmd == "download":
         names = list(args.names)
-        if "papers" in names:
-            names.remove("papers")
-            names += [n for paper in PAPERS.values() for n in paper]
+        for alias in ("all", "papers"):
+            if alias in names:
+                names.remove(alias)
+                names += [n for paper in PAPERS.values() for n in paper]
         return download(names, root, dict(a.split("=", 1) for a in args.archive), args.workers, args.keep_all,
                         args.composite_score, args.composite_duplicates, args.keep_downloads)
     if args.cmd == "ratings":
